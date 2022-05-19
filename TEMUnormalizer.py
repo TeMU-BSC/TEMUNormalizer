@@ -24,7 +24,9 @@ from nltk.tokenize import word_tokenize
 #For TEST
 #os.chdir("/home/crodri/GIT/TEMUNorm/")
 #filepath = "./tsv_dictionaries/SpanishSnomed.tsv"
-
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 def loadDict(filepath):
     import re
@@ -115,6 +117,44 @@ def fuzzyMatch(termdic,reference_dict,umbral):
     t2 = time.time()
     print("Fuzzy matching applied in ",(t2-t1)/60," minutes")
     return termdic
+
+def alt_cosine(x,y):
+    return np.inner(x,y)/np.sqrt(np.dot(x,x)*np.dot(y,y)) #~25x faster than sklearn
+
+def sentenceTransformerMatch(termdic,reference_dict,reference_dict_vec='',umbral=93):
+    """
+    umbral entre 0 y 100
+    """
+    #import time
+    t1 = time.time()
+    # If the vectorisation of the reference dict is already done, import it
+    # else, compute it
+    model = SentenceTransformer('hiiamsid/sentence_similarity_spanish_es')
+    allterms = list(reference_dict.keys())
+    if os.path.isfile(reference_dict_vec):
+        allterms_vec = np.load(reference_dict_vec)
+    else:
+        allterms_vec = model.encode(allterms)
+    testerms = notEmpty(termdic)
+    print("Will search: ",len(testerms)," using sentence transformer match")
+    testerms_vec = model.encode(testerms)
+    for i in range(len(testerms)):
+        cosine = []
+        for j in range(len(allterms)):
+            #cosine.append(cosine_similarity(testerms_vec[i,:].reshape(1,-1), allterms_vec[j,:].reshape(1,-1))[0][0])
+            cosine.append(alt_cosine(np.squeeze(testerms_vec[i,:].reshape(1,-1)), 
+                                            np.squeeze(allterms_vec[j,:].reshape(1,-1))))
+        highest = [allterms[cosine.index(max(cosine))]]
+        highest.append(max(cosine))
+        if highest:
+            if highest[-1]*100 >= umbral: # Cosine similarity is between 0 and 1
+                termdic[testerms[i]] = [[reference_dict[highest[0]],highest[-1]]]
+            else:
+                pass
+    t2 = time.time()
+    print("Sentence transformer matching applied in ",(t2-t1)/60," minutes")
+    return termdic
+
 
 #-To Add Later <---------------------
 def createW2VecIndex(reference_dict):
@@ -225,6 +265,12 @@ def main(argv=None):
         termdic = fuzzyMatch(termdic,reference_dict,options.umbral)
         endedwith = len(notEmpty(termdic))
         print("number of terms missing after fuzzy match: ", endedwith)
+        
+        print("Sentence transformer match")
+        termdic = sentenceTransformerMatch(termdic,reference_dict,umbral=options.umbral)
+        endedwith = len(notEmpty(termdic))
+        print("number of terms missing after Sentence transformer match: ", endedwith)
+        
         percent = (endedwith*100)/initiatewith
         print(percent," % NOT found")
         writeOut(termdic,options.fileout)
