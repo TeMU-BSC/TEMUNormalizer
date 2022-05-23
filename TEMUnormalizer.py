@@ -27,6 +27,10 @@ from nltk.tokenize import word_tokenize
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+from multiprocessing import Pool, cpu_count
+import itertools 
+from itertools import repeat
+import pandas as pd
 
 def loadDict(filepath):
     import re
@@ -36,7 +40,7 @@ def loadDict(filepath):
         term = duplo[0]
         code = duplo[1]
         codes = code.split("|")
-        term = r.sub('',term).rstrip().lower()
+        term = r.sub('',term).strip().lower()
         if term in reference_dict.keys():
             previous_codes = reference_dict[term]
             newlist = list(set(codes).union(set(previous_codes)))
@@ -47,6 +51,23 @@ def loadDict(filepath):
     print(len(reference_dict)," entries")
     return reference_dict
 
+def loadDict_official(filepath):
+    import re
+    r = re.compile(r'\(.*\)$')
+    dict_df = pd.read_csv(filepath, sep="\t")
+    reference_dict = {}    
+    for code, term in zip(dict_df.code.to_list(), dict_df.term.to_list()):
+        termino = r.sub('',term).strip().lower()
+        if termino in reference_dict.keys():
+            previous_codes = reference_dict[termino]
+            newlist = list(set(list(previous_codes)+code))
+            reference_dict[termino] = newlist
+        else: 
+            reference_dict[termino] = [code]
+    
+    print("Loaded dictionary from: ",filepath)
+    print(len(reference_dict)," entries")
+    return reference_dict
 
 def loadTermList(apath):
     termdic = {}
@@ -118,6 +139,50 @@ def fuzzyMatch(termdic,reference_dict,umbral):
     print("Fuzzy matching applied in ",(t2-t1)/60," minutes")
     return termdic
 
+def multicore_search(termdic, reference_dict, umbral, search_type):
+    # Prepare combinations of list (all vs all)
+    all_terms = list(reference_dict.keys())
+    testerms = notEmpty(termdic)
+    valores = zip(testerms,repeat(all_terms), repeat(umbral))
+    p = Pool(cpu_count())
+    t1 = time.time()
+    if search_type == "fuzzymatch":
+        print("Will search: ",len(testerms)," using fuzzy match")  
+        results = p.map(fuzzyMatch_multi, iterable = valores, chunksize=1)
+        for result in results:
+            if result[1] is not None:
+                termdic[result[0]]= [[reference_dict[result[1][0]]],result[1][-1]]
+    else:
+        print("Will search: ",len(testerms)," using sentence embedding match")  
+    
+    t2 = time.time()
+    print(search_type," applied in ",(t2-t1)/60," minutes")
+    
+    return termdic
+    
+def fuzzyMatch_multi(args):
+    """
+    umbral entre 0 y 100
+    """
+    #expand args
+    test_term, dicc_terms, umbral = args
+    # Calculate most similar value (using rapidfuzz)
+    highest = process.extractOne(test_term, dicc_terms, processor = None,
+                                 score_cutoff = umbral)
+    # output rules
+    if highest:
+        if highest[-1] >= umbral:
+            return [test_term, highest]
+        else:
+            return [test_term, None]   
+    else:
+        return [test_term, None]
+    
+    
+def sentenceTransformer_multi(args):
+    #expand args
+    test_term, dicc_terms, umbral = args
+    
 def alt_cosine(x,y):
     return np.inner(x,y)/np.sqrt(np.dot(x,x)*np.dot(y,y)) #~25x faster than sklearn
 
@@ -154,6 +219,22 @@ def sentenceTransformerMatch(termdic,reference_dict,reference_dict_vec='',umbral
     t2 = time.time()
     print("Sentence transformer matching applied in ",(t2-t1)/60," minutes")
     return termdic
+
+def transform_id_list_permutation(lista_source, lista_target):
+    # Multicore need to pass elements of vectors to multicore_calculate_similarity.
+    # We need to manually calculate two vectors (source and target) which can be passed 
+    # through a zip() function which has all the permutations between id's.
+
+    # Get all permutations between lists
+    permutaciones_wo_dup = itertools.product(lista_source, lista_target)
+    lista_source_trans = list()
+    lista_target_trans = list()
+    # Iterate over permutaciones_wo_dup to have separated elements:
+    for i in permutaciones_wo_dup:
+        lista_source_trans.append(i[0])
+        lista_target_trans.append(i[1])
+
+    return (lista_source_trans, lista_target_trans)
 
 
 #-To Add Later <---------------------
@@ -241,7 +322,7 @@ def main(argv=None):
     (options, args) = parser.parse_args(argv)
     
     print("Load reference dictionary from", options.reference_dict)
-    reference_dict = loadDict(options.reference_dict)
+    reference_dict = loadDict_official(options.reference_dict)
     if options.termlist:
         print("load term list: ",options.termlist)
         if options.brat:
@@ -254,22 +335,31 @@ def main(argv=None):
             termdic = loadTermList(options.termlist)
         
         initiatewith = len(notEmpty(termdic))
-        print("number of terms to test: ", initiatewith)
+        print("number of terms to test: ", initiatewith)       
         
+        
+        ## The directMatch is fast
         t1 = time.time()
         print("First  try exact Match")
         termdic = directMatch(termdic,reference_dict)
         print("number of terms missing after direct match: ", len(notEmpty(termdic)))
         
-        print("fuzzy match")
-        termdic = fuzzyMatch(termdic,reference_dict,options.umbral)
+        print("Fuzzy match")
+        termdic = multicore_search(termdic, reference_dict, options.umbral, "fuzzymatch")
         endedwith = len(notEmpty(termdic))
-        print("number of terms missing after fuzzy match: ", endedwith)
+        # print("fuzzy match")
+        # termdic = fuzzyMatch(termdic,reference_dict,options.umbral)
+        # endedwith = len(notEmpty(termdic))
+        # print("number of terms missing after fuzzy match: ", endedwith)
         
-        print("Sentence transformer match")
-        termdic = sentenceTransformerMatch(termdic,reference_dict,umbral=options.umbral)
-        endedwith = len(notEmpty(termdic))
-        print("number of terms missing after Sentence transformer match: ", endedwith)
+        # Cargamos modelo 
+        #print("OTROS")
+        #termdic = multicore_search(termdic, reference_dict, options.umbral, "sentence_otro")
+
+        # print("Sentence transformer match")
+        # termdic = sentenceTransformerMatch(termdic,reference_dict,umbral=options.umbral)
+        # endedwith = len(notEmpty(termdic))
+        # print("number of terms missing after Sentence transformer match: ", endedwith)
         
         percent = (endedwith*100)/initiatewith
         print(percent," % NOT found")

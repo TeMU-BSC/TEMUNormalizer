@@ -1,4 +1,19 @@
 # TEMUnormalizer
+## Notas
+This branch contains a version of TEMUNormalizer that uses multiprocessing to get faster results.
+results faster. 
+
+The SentenceEmbedding_match function is not yet implemented: 
+
+TO-DO list: 
+
+- [] Create SentenceEmbedding_multi() function: Need to review how to load embedding model for multiproc.
+- [] Update multicore_search() function to work.
+
+
+This function has been used to calculate Distemist baseline. 
+
+
 
 ## Description
 Baseline term normalizer to find Snomed and CIE-10 codes
