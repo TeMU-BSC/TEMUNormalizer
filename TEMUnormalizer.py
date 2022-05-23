@@ -24,7 +24,7 @@ from nltk.tokenize import word_tokenize
 #For TEST
 #os.chdir("/home/crodri/GIT/TEMUNorm/")
 #filepath = "./tsv_dictionaries/SpanishSnomed.tsv"
-from sentence_transformers import SentenceTransformer
+#from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from multiprocessing import Pool, cpu_count
@@ -60,10 +60,10 @@ def loadDict_official(filepath):
         termino = r.sub('',term).strip().lower()
         if termino in reference_dict.keys():
             previous_codes = reference_dict[termino]
-            newlist = list(set(list(previous_codes)+code))
+            newlist = list(set(previous_codes + [str(code)]))
             reference_dict[termino] = newlist
         else: 
-            reference_dict[termino] = [code]
+            reference_dict[termino] = [str(code)]
     
     print("Loaded dictionary from: ",filepath)
     print(len(reference_dict)," entries")
@@ -111,7 +111,7 @@ def directMatch(termdic,reference_dict):
         try:
             snomedid = reference_dict[term]
             #print("ExactMatch: ",snomedid)
-            termdic[term] = [[snomedid,100.0]]
+            termdic[term] = [snomedid,100.0]
             #termlist.remove(term)
         except KeyError:
             pass
@@ -151,7 +151,7 @@ def multicore_search(termdic, reference_dict, umbral, search_type):
         results = p.map(fuzzyMatch_multi, iterable = valores, chunksize=1)
         for result in results:
             if result[1] is not None:
-                termdic[result[0]]= [[reference_dict[result[1][0]]],result[1][-1]]
+                termdic[result[0]]= [reference_dict[result[1][0]],result[1][1]]
     else:
         print("Will search: ",len(testerms)," using sentence embedding match")  
     
@@ -302,9 +302,10 @@ def writeOut(termdic,fileout):
         objeto = termdic[term]
         if objeto == '':
             wr.writerow([term,'',0.0])
-        else:
-            code,score = objeto[0]
-            wr.writerow([term,', '.join(code),score])
+        else: # [['51946000'], 90.0]
+            code = objeto[0]
+            score = objeto[1]
+            wr.writerow([term,','.join(code),score])
     w.close()
 
 from optparse import OptionParser
